@@ -1,0 +1,1642 @@
+# 💳 Core PHP Visa Gateway Integration — Razorpay
+
+[![PHP](https://img.shields.io/badge/PHP-7.4%20%7C%208.x-777BB4?style=for-the-badge\&logo=php\&logoColor=white)](https://www.php.net/)
+[![MySQL](https://img.shields.io/badge/MySQL-5.7%20%7C%208.0-4479A1?style=for-the-badge\&logo=mysql\&logoColor=white)](https://www.mysql.com/)
+[![Razorpay](https://img.shields.io/badge/Payment-Razorpay%20Test%20Mode-0C2340?style=for-the-badge\&logo=razorpay\&logoColor=white)](https://razorpay.com/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
+
+A simple end-to-end **Visa Application Payment Gateway** project built with **Core PHP, MySQL, MySQLi, cURL, JavaScript, and Razorpay**.
+
+The project demonstrates how a PHP application can create a server-side payment order, launch a hosted payment checkout, receive the payment response, verify the Razorpay signature on the server, and update the transaction status in MySQL.
+
+The project intentionally avoids Laravel, Symfony, Composer SDKs, and other full-stack frameworks so that the complete payment flow remains easy to understand.
+
+> **Important:** This project is intended primarily for learning, development, and testing. Before using a payment system in production, additional controls such as webhooks, idempotency, HTTPS, secure secret management, detailed audit logging, access control, and reconciliation should be implemented.
+
+---
+
+# 📌 Table of Contents
+
+1. [Project Overview](#-project-overview)
+2. [Learning Objectives](#-learning-objectives)
+3. [Features](#-features)
+4. [Technology Stack](#-technology-stack)
+5. [Payment Flow](#-payment-flow)
+6. [Project Structure](#-project-structure)
+7. [File Responsibilities](#-file-responsibilities)
+8. [Database Structure](#-database-structure)
+9. [Requirements](#-requirements)
+10. [Installation](#-installation)
+11. [Razorpay Configuration](#-razorpay-configuration)
+12. [Running the Project](#-running-the-project)
+13. [Testing the Payment Flow](#-testing-the-payment-flow)
+14. [Security](#-security)
+15. [Important Production Considerations](#-important-production-considerations)
+16. [Troubleshooting](#-troubleshooting)
+17. [Development Flow](#-development-flow)
+18. [Future Improvements](#-future-improvements)
+19. [License](#-license)
+
+---
+
+# 📌 Project Overview
+
+This project simulates a real-world visa application portal.
+
+The applicant:
+
+1. Opens the visa application form.
+2. Enters personal and passport information.
+3. Submits the application.
+4. The PHP server creates a Razorpay order.
+5. The application is stored in MySQL with a `PENDING` payment status.
+6. Razorpay Checkout is opened in the browser.
+7. The applicant completes the payment/authentication process.
+8. Razorpay returns payment information to the application.
+9. The PHP server verifies the Razorpay signature.
+10. The transaction is marked as `SUCCESS` or `FAILED`.
+11. A payment confirmation/receipt is displayed.
+
+The important principle is:
+
+> **The browser is never trusted to determine whether a payment was successful.**
+
+The server verifies the payment information before changing the database status.
+
+---
+
+# 🎯 Learning Objectives
+
+This project is designed to demonstrate several important concepts used in real PHP applications.
+
+## 1. Server-to-Server API Communication
+
+PHP communicates with Razorpay using cURL.
+
+Example:
+
+```php
+curl_init();
+curl_setopt();
+curl_exec();
+```
+
+This demonstrates how PHP can communicate with external APIs without requiring a third-party PHP SDK.
+
+---
+
+## 2. HTTP Basic Authentication
+
+The Razorpay API requires authentication using the API Key ID and API Key Secret.
+
+The credentials are sent from the PHP server to Razorpay.
+
+The secret key must never be exposed to browser-side JavaScript.
+
+---
+
+## 3. Server-Side Order Creation
+
+The payment order is created by the PHP server before opening Razorpay Checkout.
+
+This is important because the server controls:
+
+* Amount
+* Currency
+* Order ID
+* Application reference
+* Payment state
+
+The browser should not be trusted with the final payable amount.
+
+---
+
+## 4. Payment State Management
+
+Each transaction has a payment state:
+
+```text
+PENDING
+   │
+   ├── SUCCESS
+   │
+   └── FAILED
+```
+
+The initial state is:
+
+```text
+PENDING
+```
+
+After payment verification, the application changes the state appropriately.
+
+---
+
+## 5. Cryptographic Signature Verification
+
+Razorpay returns a payment signature.
+
+The server independently calculates the expected signature using:
+
+```php
+hash_hmac('sha256', $payload, $keySecret);
+```
+
+The calculated signature is compared with the signature returned by Razorpay.
+
+A timing-safe comparison should be performed using:
+
+```php
+hash_equals();
+```
+
+---
+
+## 6. SQL Injection Protection
+
+Database operations use prepared statements.
+
+Instead of:
+
+```php
+$sql = "SELECT * FROM users WHERE email = '$email'";
+```
+
+the application uses parameterized queries.
+
+This separates SQL instructions from user-provided values.
+
+---
+
+# 🌟 Features
+
+* Visa application form
+* Responsive frontend
+* Core PHP implementation
+* MySQL database
+* MySQLi prepared statements
+* Razorpay Test Mode integration
+* Server-side Razorpay order creation
+* Server-side payment verification
+* HMAC-SHA256 signature verification
+* Payment status tracking
+* Unique Razorpay order ID
+* Pending/Success/Failed transaction states
+* Basic XSS protection
+* Basic SQL Injection protection
+* cURL API communication
+* No Laravel
+* No Symfony
+* No Razorpay PHP SDK
+* Easy-to-understand project structure
+
+---
+
+# 🛠 Technology Stack
+
+| Technology      | Purpose                       |
+| --------------- | ----------------------------- |
+| PHP 7.4 / 8.x   | Backend                       |
+| MySQL 5.7 / 8.x | Database                      |
+| MySQLi          | Database communication        |
+| cURL            | Razorpay API communication    |
+| HTML5           | Application form              |
+| CSS3            | Styling                       |
+| JavaScript      | Razorpay Checkout integration |
+| Razorpay        | Payment gateway               |
+| Apache / Nginx  | Web server                    |
+| phpMyAdmin      | Database administration       |
+
+---
+
+# 🔄 Payment Flow
+
+The complete payment process can be understood as follows:
+
+```text
+┌────────────────────┐
+│    User Browser    │
+└─────────┬──────────┘
+          │
+          │ 1. Submit Visa Application
+          ▼
+┌────────────────────┐
+│    index.php       │
+└─────────┬──────────┘
+          │
+          │ 2. POST application data
+          ▼
+┌────────────────────────┐
+│ process_payment.php    │
+└─────────┬──────────────┘
+          │
+          │ 3. Create Razorpay Order
+          ▼
+┌────────────────────────┐
+│     Razorpay API       │
+└─────────┬──────────────┘
+          │
+          │ 4. Return order_id
+          ▼
+┌────────────────────────┐
+│ process_payment.php    │
+└─────────┬──────────────┘
+          │
+          │ 5. Save PENDING transaction
+          ▼
+┌────────────────────────┐
+│        MySQL           │
+└────────────────────────┘
+          │
+          │
+          │ 6. Open Razorpay Checkout
+          ▼
+┌────────────────────────┐
+│     Razorpay Checkout  │
+└─────────┬──────────────┘
+          │
+          │ 7. User completes payment
+          ▼
+┌────────────────────────┐
+│    Payment Response    │
+│ payment_id             │
+│ order_id               │
+│ signature              │
+└─────────┬──────────────┘
+          │
+          │ 8. Send response to server
+          ▼
+┌────────────────────────┐
+│       verify.php       │
+└─────────┬──────────────┘
+          │
+          │ 9. Verify HMAC signature
+          ▼
+┌────────────────────────┐
+│        MySQL           │
+│                        │
+│ PENDING → SUCCESS      │
+│       or               │
+│ PENDING → FAILED       │
+└─────────┬──────────────┘
+          │
+          │ 10. Display result
+          ▼
+┌────────────────────┐
+│ Payment Receipt    │
+└────────────────────┘
+```
+
+---
+
+# 📁 Project Structure
+
+```text
+pgateway/
+│
+├── db.php
+│
+├── index.php
+│
+├── process_payment.php
+│
+├── verify.php
+│
+├── schema.sql
+│
+├── README.md
+│
+└── LICENSE
+```
+
+---
+
+# 📄 File Responsibilities
+
+## `db.php`
+
+Location:
+
+```text
+pgateway/db.php
+```
+
+Responsible for:
+
+* MySQL connection
+* Database credentials
+* Connection error handling
+* Providing the `$conn` database object
+
+Example:
+
+```php
+$host     = "localhost";
+$user     = "root";
+$password = "";
+$database = "pGateway_schema";
+
+$conn = new mysqli(
+    $host,
+    $user,
+    $password,
+    $database
+);
+```
+
+---
+
+## `index.php`
+
+Location:
+
+```text
+pgateway/index.php
+```
+
+Responsible for:
+
+* Displaying the visa application form
+* Collecting applicant information
+* Basic client-side validation
+* Sending the form to `process_payment.php`
+
+Typical fields include:
+
+```text
+Full Name
+Email
+Passport Number
+Visa Type
+```
+
+---
+
+## `process_payment.php`
+
+Location:
+
+```text
+pgateway/process_payment.php
+```
+
+Responsible for:
+
+1. Receiving the application.
+2. Validating input.
+3. Determining the payment amount on the server.
+4. Creating a Razorpay order.
+5. Saving the application in MySQL.
+6. Setting the initial payment status to `PENDING`.
+7. Opening Razorpay Checkout.
+
+This is one of the most important files in the project.
+
+---
+
+## `verify.php`
+
+Location:
+
+```text
+pgateway/verify.php
+```
+
+Responsible for:
+
+* Receiving Razorpay payment information.
+* Validating the payment/order relationship.
+* Recalculating the HMAC-SHA256 signature.
+* Comparing signatures securely.
+* Updating the database.
+* Displaying the payment result.
+
+Important values include:
+
+```text
+razorpay_payment_id
+razorpay_order_id
+razorpay_signature
+```
+
+---
+
+## `schema.sql`
+
+Location:
+
+```text
+pgateway/schema.sql
+```
+
+Responsible for creating:
+
+* Database
+* Visa application table
+* Payment-related fields
+* Indexes and constraints
+
+---
+
+# 🗄️ Database Structure
+
+Database name:
+
+```text
+pGateway_schema
+```
+
+Main table:
+
+```text
+visa_applications
+```
+
+## Table Structure
+
+| Column         | Type          | Description            |
+| -------------- | ------------- | ---------------------- |
+| id             | INT           | Primary key            |
+| fullname       | VARCHAR(100)  | Applicant name         |
+| email          | VARCHAR(100)  | Applicant email        |
+| passport       | VARCHAR(50)   | Passport number        |
+| visa_type      | VARCHAR(50)   | Visa category          |
+| amount         | DECIMAL(10,2) | Application fee        |
+| currency       | VARCHAR(10)   | Currency               |
+| order_id       | VARCHAR(100)  | Razorpay order ID      |
+| payment_id     | VARCHAR(100)  | Razorpay payment ID    |
+| payment_status | ENUM          | PENDING/SUCCESS/FAILED |
+| created_at     | TIMESTAMP     | Creation time          |
+| updated_at     | TIMESTAMP     | Last update            |
+
+---
+
+# 🗃️ Database Schema
+
+Create:
+
+```text
+pgateway/schema.sql
+```
+
+with:
+
+```sql
+CREATE DATABASE IF NOT EXISTS `pGateway_schema`;
+
+USE `pGateway_schema`;
+
+CREATE TABLE IF NOT EXISTS `visa_applications` (
+    `id` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+
+    `fullname` VARCHAR(100) NOT NULL,
+
+    `email` VARCHAR(150) NOT NULL,
+
+    `passport` VARCHAR(50) NOT NULL,
+
+    `visa_type` VARCHAR(50) NOT NULL,
+
+    `amount` DECIMAL(10,2) NOT NULL,
+
+    `currency` VARCHAR(10) NOT NULL DEFAULT 'INR',
+
+    `order_id` VARCHAR(100) NOT NULL UNIQUE,
+
+    `payment_id` VARCHAR(100) DEFAULT NULL,
+
+    `payment_status`
+        ENUM('PENDING', 'SUCCESS', 'FAILED')
+        NOT NULL DEFAULT 'PENDING',
+
+    `created_at`
+        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    `updated_at`
+        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+
+    INDEX `idx_email` (`email`),
+    INDEX `idx_payment_status` (`payment_status`),
+    INDEX `idx_created_at` (`created_at`)
+)
+ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4
+COLLATE=utf8mb4_unicode_ci;
+```
+
+---
+
+# 💻 Requirements
+
+Before running the project, install:
+
+### Required
+
+* Apache or Nginx
+* PHP 7.4 or newer
+* MySQL 5.7+ / MariaDB
+* PHP `mysqli` extension
+* PHP `curl` extension
+* Modern web browser
+* Razorpay account
+
+### Recommended Local Environments
+
+Any of the following can be used:
+
+* XAMPP
+* WAMP
+* Laragon
+* MAMP
+* LAMP
+
+---
+
+# ⚙️ Installation
+
+## Step 1 — Clone or Copy the Project
+
+Place the project inside your web server directory.
+
+### XAMPP
+
+```text
+C:\xampp\htdocs\pgateway\
+```
+
+### Laragon
+
+```text
+C:\laragon\www\pgateway\
+```
+
+The final structure should look like:
+
+```text
+C:\laragon\www\pgateway\
+```
+
+or:
+
+```text
+C:\xampp\htdocs\pgateway\
+```
+
+---
+
+# Step 2 — Start the Server
+
+For XAMPP:
+
+```text
+Apache → Start
+MySQL  → Start
+```
+
+For Laragon:
+
+```text
+Start All
+```
+
+---
+
+# Step 3 — Create the Database
+
+Open:
+
+```text
+http://localhost/phpmyadmin/
+```
+
+Import:
+
+```text
+pgateway/schema.sql
+```
+
+Alternatively, execute the SQL manually.
+
+After successful execution, you should see:
+
+```text
+pGateway_schema
+    └── visa_applications
+```
+
+---
+
+# Step 4 — Configure Database Connection
+
+Open:
+
+```text
+pgateway/db.php
+```
+
+Configure the credentials.
+
+Example:
+
+```php
+<?php
+
+$host     = "localhost";
+$user     = "root";
+$password = "";
+$database = "pGateway_schema";
+
+$conn = new mysqli(
+    $host,
+    $user,
+    $password,
+    $database
+);
+
+if ($conn->connect_error) {
+    die("Database connection failed.");
+}
+
+$conn->set_charset("utf8mb4");
+```
+
+For a different MySQL username/password, replace the values accordingly.
+
+---
+
+# 🔑 Razorpay Configuration
+
+Create or access your Razorpay account and enable **Test Mode**.
+
+You will need:
+
+```text
+Key ID
+Key Secret
+```
+
+Example:
+
+```text
+rzp_test_xxxxxxxxxxxxx
+```
+
+and:
+
+```text
+xxxxxxxxxxxxxxxxxxxx
+```
+
+---
+
+# ⚠️ Never Expose the Key Secret
+
+The Razorpay secret key must remain on the server.
+
+Do NOT place it inside:
+
+```text
+index.php
+JavaScript
+HTML
+public frontend files
+```
+
+Do not commit the secret key to GitHub.
+
+---
+
+# 🔐 Recommended Configuration
+
+For a simple project, credentials may initially be stored in a configuration file outside the public-facing logic.
+
+For example:
+
+```text
+pgateway/
+├── config/
+│   └── config.php
+│
+├── db.php
+├── index.php
+├── process_payment.php
+├── verify.php
+└── schema.sql
+```
+
+Example:
+
+```php
+<?php
+
+define('RAZORPAY_KEY_ID', 'rzp_test_xxxxxxxxx');
+define('RAZORPAY_KEY_SECRET', 'xxxxxxxxxxxxxxxxx');
+```
+
+For production, use environment variables or a secure server-side secrets mechanism instead.
+
+---
+
+# 💰 Payment Amount
+
+The payment amount should be controlled by the server.
+
+For example:
+
+```php
+$amount = 7900.00;
+```
+
+The browser should not be allowed to decide the final payable amount.
+
+For Razorpay's API, the amount is generally sent in the smallest currency unit.
+
+For INR:
+
+```text
+₹7900.00
+```
+
+becomes:
+
+```text
+790000 paise
+```
+
+Example:
+
+```php
+$amountInPaise = (int) round($amount * 100);
+```
+
+---
+
+# 🌐 Running the Application
+
+## XAMPP
+
+Open:
+
+```text
+http://localhost/pgateway/
+```
+
+or:
+
+```text
+http://localhost/pgateway/index.php
+```
+
+## Laragon
+
+Open:
+
+```text
+http://localhost/pgateway/
+```
+
+If Laragon provides an automatic virtual host, the project may also be accessible through the generated local domain.
+
+---
+
+# 🧪 Testing the Payment Flow
+
+## Step 1
+
+Open:
+
+```text
+http://localhost/pgateway/
+```
+
+---
+
+## Step 2
+
+Enter test application information.
+
+Example:
+
+```text
+Full Name:
+Test Applicant
+
+Email:
+test@example.com
+
+Passport:
+TEST123456
+
+Visa Type:
+Tourist
+```
+
+---
+
+## Step 3
+
+Click:
+
+```text
+Proceed to Secure Payment
+```
+
+The PHP backend should create a Razorpay order.
+
+---
+
+## Step 4
+
+Check MySQL
+
+Before payment completion, the database should contain something similar to:
+
+```text
+payment_status = PENDING
+```
+
+Example:
+
+```text
+id          1
+order_id    order_xxxxxxxxx
+payment_id  NULL
+status      PENDING
+```
+
+---
+
+## Step 5
+
+Complete the Razorpay Test Payment
+
+Use the current test credentials provided by Razorpay's official documentation/dashboard.
+
+> Test cards and authentication behavior can change. Do not hard-code assumptions about a particular OTP or 3DS flow in application logic.
+
+---
+
+## Step 6
+
+Verify the Payment
+
+After Checkout returns the payment information, `verify.php` should:
+
+1. Receive the payment ID.
+2. Receive the order ID.
+3. Receive the signature.
+4. Find the corresponding database order.
+5. Calculate the expected signature.
+6. Compare the signatures.
+7. Update the payment status.
+
+---
+
+# 🔐 Signature Verification
+
+The general verification process is:
+
+```text
+order_id + "|" + payment_id
+```
+
+The server generates:
+
+```php
+$generatedSignature = hash_hmac(
+    'sha256',
+    $orderId . '|' . $paymentId,
+    RAZORPAY_KEY_SECRET
+);
+```
+
+Then:
+
+```php
+if (hash_equals($generatedSignature, $razorpaySignature)) {
+    // Signature is valid
+}
+```
+
+The secret key remains on the server.
+
+---
+
+# 🔒 Security Principles
+
+## 1. Prepared Statements
+
+Always use prepared statements.
+
+Example:
+
+```php
+$stmt = $conn->prepare(
+    "SELECT * FROM visa_applications WHERE order_id = ?"
+);
+
+$stmt->bind_param("s", $orderId);
+
+$stmt->execute();
+```
+
+This helps protect against SQL Injection.
+
+---
+
+## 2. Output Escaping
+
+When displaying user-controlled values:
+
+```php
+htmlspecialchars(
+    $value,
+    ENT_QUOTES,
+    'UTF-8'
+);
+```
+
+Example:
+
+```php
+echo htmlspecialchars(
+    $fullname,
+    ENT_QUOTES,
+    'UTF-8'
+);
+```
+
+This helps reduce XSS risks.
+
+---
+
+## 3. Server-Side Amount Control
+
+Never trust:
+
+```html
+<input name="amount">
+```
+
+for the final payment amount.
+
+Instead:
+
+```php
+$amount = 7900.00;
+```
+
+should be determined by server-side application logic.
+
+---
+
+## 4. Signature Verification
+
+Never mark a payment as successful merely because the browser says:
+
+```text
+payment successful
+```
+
+The server must verify the payment response.
+
+---
+
+## 5. HTTPS
+
+Production payment applications must use HTTPS.
+
+Never process real payment information over plain HTTP.
+
+---
+
+## 6. Protect API Credentials
+
+Never commit:
+
+```text
+Key Secret
+Database Password
+SMTP Password
+API Tokens
+```
+
+to a public Git repository.
+
+Use:
+
+```text
+.env
+```
+
+or server/environment-level configuration where appropriate.
+
+---
+
+# ⚠️ Important Production Considerations
+
+This project demonstrates the basic payment flow, but a real production payment system requires additional protections.
+
+## 1. Webhooks
+
+A production application should use Razorpay webhooks to receive authoritative payment events.
+
+For example:
+
+```text
+payment.captured
+payment.failed
+order.paid
+```
+
+The application should process relevant webhook events securely.
+
+---
+
+## 2. Idempotency
+
+The same payment event should not accidentally create multiple successful transactions.
+
+The application should be designed so that processing the same event twice does not corrupt the payment state.
+
+---
+
+## 3. Database Transactions
+
+For important payment state changes, database transactions should be considered.
+
+Example:
+
+```text
+BEGIN
+   ↓
+Validate payment
+   ↓
+Update transaction
+   ↓
+Update application
+   ↓
+COMMIT
+```
+
+If something fails:
+
+```text
+ROLLBACK
+```
+
+---
+
+## 4. Payment Reconciliation
+
+Production applications should periodically compare:
+
+```text
+Application Database
+        ↓
+Razorpay Records
+```
+
+This helps identify transactions that are:
+
+* Missing
+* Duplicated
+* Pending
+* Failed
+* Captured but not reflected locally
+
+---
+
+## 5. Audit Logging
+
+Important payment events should be logged.
+
+Example:
+
+```text
+Order created
+Payment initiated
+Payment callback received
+Signature verified
+Payment marked successful
+Payment failed
+Webhook received
+```
+
+Logs should not contain sensitive secrets.
+
+---
+
+## 6. CSRF Protection
+
+Application forms that modify application/payment state should use CSRF protection where appropriate.
+
+Example:
+
+```text
+CSRF Token
+    ↓
+Form Submission
+    ↓
+Server Validation
+```
+
+---
+
+## 7. Input Validation
+
+Validate all incoming data on the server.
+
+Example:
+
+```php
+if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+    die("Invalid email address.");
+}
+```
+
+Do not depend only on JavaScript validation.
+
+---
+
+## 8. Authentication and Authorization
+
+If an administration panel is added later, implement:
+
+* Password hashing
+* Session security
+* Role-based authorization
+* CSRF protection
+* Login rate limiting
+* Secure logout
+* Session regeneration
+
+Passwords should be stored using:
+
+```php
+password_hash();
+```
+
+and checked using:
+
+```php
+password_verify();
+```
+
+---
+
+# 🐛 Troubleshooting
+
+## Database connection failed
+
+Check:
+
+```text
+db.php
+```
+
+Verify:
+
+```text
+Host
+Username
+Password
+Database name
+```
+
+Also confirm that MySQL is running.
+
+---
+
+## Unknown database
+
+If you see:
+
+```text
+Unknown database 'pGateway_schema'
+```
+
+import:
+
+```text
+schema.sql
+```
+
+or create the database manually.
+
+---
+
+## Table doesn't exist
+
+If you see:
+
+```text
+Table 'pGateway_schema.visa_applications' doesn't exist
+```
+
+execute:
+
+```text
+schema.sql
+```
+
+---
+
+## cURL Error
+
+Check that PHP has the cURL extension enabled.
+
+### XAMPP
+
+Open:
+
+```text
+C:\xampp\php\php.ini
+```
+
+Search for:
+
+```text
+extension=curl
+```
+
+Enable it if necessary.
+
+Restart Apache after changing `php.ini`.
+
+---
+
+## Razorpay Authentication Error
+
+Verify:
+
+```text
+Key ID
+Key Secret
+```
+
+Also confirm that you are using:
+
+```text
+Test Key
+```
+
+with:
+
+```text
+Test Mode
+```
+
+Do not mix:
+
+```text
+Test Key
+```
+
+with:
+
+```text
+Live Mode
+```
+
+or vice versa.
+
+---
+
+## Signature Verification Failed
+
+Check:
+
+1. Correct Razorpay Key Secret.
+2. Correct `order_id`.
+3. Correct `payment_id`.
+4. Correct signature value.
+5. No accidental whitespace.
+6. The order belongs to the expected application.
+7. The server is using the correct environment/configuration.
+
+---
+
+# 🔄 Application State
+
+The application uses a simple payment state machine:
+
+```text
+                 ┌───────────┐
+                 │  PENDING  │
+                 └─────┬─────┘
+                       │
+              ┌────────┴────────┐
+              │                 │
+              ▼                 ▼
+        ┌───────────┐     ┌───────────┐
+        │  SUCCESS  │     │  FAILED   │
+        └───────────┘     └───────────┘
+```
+
+The normal flow is:
+
+```text
+Application Created
+        ↓
+Order Created
+        ↓
+PENDING
+        ↓
+Payment Attempt
+        ↓
+Signature Verification
+        ↓
+SUCCESS / FAILED
+```
+
+---
+
+# 🧑‍💻 Development Flow
+
+When modifying the project, follow this order:
+
+```text
+1. Understand the existing payment flow
+            ↓
+2. Modify database schema if required
+            ↓
+3. Update PHP backend
+            ↓
+4. Update frontend
+            ↓
+5. Test invalid input
+            ↓
+6. Test successful payment
+            ↓
+7. Test failed payment
+            ↓
+8. Check database state
+            ↓
+9. Check PHP/server errors
+            ↓
+10. Commit changes to Git
+```
+
+---
+
+# 📦 Git Usage
+
+Initialize the repository:
+
+```bash
+git init
+```
+
+Add files:
+
+```bash
+git add .
+```
+
+Commit:
+
+```bash
+git commit -m "Initial Razorpay payment gateway integration"
+```
+
+Add your GitHub repository:
+
+```bash
+git remote add origin YOUR_GITHUB_REPOSITORY
+```
+
+Push:
+
+```bash
+git push -u origin main
+```
+
+---
+
+# 🚫 Files That Should Not Be Committed
+
+Do not commit sensitive configuration.
+
+For example:
+
+```text
+.env
+config/secrets.php
+database passwords
+Razorpay live secrets
+SMTP passwords
+private API keys
+```
+
+A `.gitignore` file should be added.
+
+Example:
+
+```gitignore
+.env
+.env.*
+config/secrets.php
+storage/logs/
+*.log
+```
+
+---
+
+# 🚀 Future Improvements
+
+The current project can be extended into a complete visa application platform.
+
+Possible improvements:
+
+## Application Management
+
+* Application reference number
+* Application status
+* Admin dashboard
+* Applicant login
+* Application tracking
+* Application PDF
+* Email notifications
+
+## Payment
+
+* Razorpay webhooks
+* Payment reconciliation
+* Refund handling
+* Partial refund support
+* Payment history
+* Payment audit logs
+* Duplicate payment protection
+* Idempotency handling
+
+## Security
+
+* CSRF protection
+* Rate limiting
+* Secure sessions
+* Content Security Policy
+* Security headers
+* Login protection
+* Audit logs
+* Environment-based secrets
+
+## Visa Application
+
+* Multi-step application
+* Passport upload
+* Applicant documents
+* Country selection
+* City selection
+* Travel details
+* Background questions
+* Document verification
+* Application review
+
+## Administration
+
+* Admin login
+* Dashboard
+* Application management
+* Payment management
+* User management
+* Reports
+* Email logs
+* Settings
+
+---
+
+# 🧪 Recommended Test Cases
+
+Before considering the project complete, test at least the following:
+
+| Test                        | Expected Result               |
+| --------------------------- | ----------------------------- |
+| Valid application           | Application accepted          |
+| Invalid email               | Validation error              |
+| Empty required field        | Validation error              |
+| Database unavailable        | Controlled error              |
+| Razorpay API unavailable    | Payment cannot start          |
+| Successful payment          | `SUCCESS`                     |
+| Failed payment              | `FAILED`                      |
+| Invalid signature           | Payment rejected              |
+| Modified order ID           | Verification fails            |
+| Modified payment ID         | Verification fails            |
+| Duplicate callback          | No duplicate transaction      |
+| Refresh verification page   | No incorrect duplicate update |
+| Browser amount modification | Server amount remains correct |
+
+---
+
+# 📊 Expected Database Flow
+
+Immediately after creating an order:
+
+```text
+payment_status
+---------------
+PENDING
+```
+
+After successful verification:
+
+```text
+payment_status
+---------------
+SUCCESS
+```
+
+and:
+
+```text
+payment_id
+---------------
+pay_xxxxxxxxxxxxx
+```
+
+After a failed transaction:
+
+```text
+payment_status
+---------------
+FAILED
+```
+
+---
+
+# 🏗️ Project Philosophy
+
+This project intentionally follows a simple architecture.
+
+The goal is not to create an unnecessarily complicated framework.
+
+Instead, the project demonstrates the fundamentals:
+
+```text
+Browser
+   ↓
+Core PHP
+   ↓
+Razorpay API
+   ↓
+MySQL
+```
+
+Each responsibility is separated into a small number of understandable files.
+
+This makes the project suitable for developers who want to understand payment gateway integration before moving to larger frameworks such as:
+
+* Laravel
+* Symfony
+* CodeIgniter
+
+---
+
+# ⚠️ Disclaimer
+
+This repository is a technical learning and demonstration project.
+
+Payment gateway behavior, API requirements, test credentials, authentication flows, and security recommendations may change over time.
+
+Always consult the current Razorpay documentation before deploying a payment system to production.
+
+Never use Razorpay live credentials in a local/test environment.
+
+Never expose the Razorpay Key Secret to the browser.
+
+---
+
+# 📜 License
+
+This project is distributed under the MIT License.
+
+See:
+
+```text
+LICENSE
+```
+
+for more information.
+
+---
+
+# 👨‍💻 Author
+
+Developed as a Core PHP payment gateway learning project.
+
+Technology focus:
+
+```text
+PHP
+MySQL
+MySQLi
+cURL
+JavaScript
+Razorpay
+Payment Security
+API Integration
+```
+
+---
